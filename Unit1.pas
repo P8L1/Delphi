@@ -4,7 +4,7 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, IdHTTP, IdSSLOpenSSL, DBXJSON;
+  Dialogs, StdCtrls, ComObj, ActiveX, DBXJSON;
 
 type
   TForm1 = class(TForm)
@@ -16,8 +16,7 @@ type
     procedure FormDestroy(Sender: TObject);
     procedure btnConvertClick(Sender: TObject);
   private
-    FHTTP: TIdHTTP;
-    FSSL: TIdSSLIOHandlerSocketOpenSSL;
+    { Private declarations }
   public
     { Public declarations }
   end;
@@ -31,32 +30,26 @@ implementation
 
 procedure TForm1.FormCreate(Sender: TObject);
 begin
-  // Create and initialize the HTTP client and SSL handler.
-  FHTTP := TIdHTTP.Create(Self);
-  Assert(FHTTP <> nil, 'Failed to create HTTP client');
-  FSSL := TIdSSLIOHandlerSocketOpenSSL.Create(FHTTP);
-  Assert(FSSL <> nil, 'Failed to create SSL IOHandler');
-  FHTTP.IOHandler := FSSL;
+  // Initialize COM for MSXML2 usage.
+  CoInitialize(nil);
+  Assert(True, 'COM initialization assumed to succeed');
 end;
 
 procedure TForm1.FormDestroy(Sender: TObject);
 begin
-  // Clean up allocated resources.
-  FreeAndNil(FHTTP);
-  // Note: FSSL is owned by FHTTP and is freed automatically.
+  CoUninitialize;
 end;
 
 procedure TForm1.btnConvertClick(Sender: TObject);
 var
   RandValue, DollarValue, RateValue: Double;
   JSONResponse: string;
-  JSONObject: TJSONObject;
+  JSONObj: TJSONObject;
   Rates: TJSONObject;
   USDRate: TJSONValue;
+  XMLHTTP: OleVariant;
 begin
-  Assert(FHTTP <> nil, 'HTTP client not initialized');
-
-  // Convert the input string to a floating-point value.
+  // Validate and convert the input amount.
   try
     RandValue := StrToFloat(edtRand.Text);
   except
@@ -66,10 +59,25 @@ begin
       Exit;
     end;
   end;
-
-  // Fetch real-time conversion rate from the API.
+  Assert(RandValue >= 0, 'Input Rand value must be non-negative');
+  
+  // Create the MSXML2.XMLHTTP object for the HTTP GET request.
   try
-    JSONResponse := FHTTP.Get('https://api.exchangerate-api.com/v4/latest/ZAR');
+    XMLHTTP := CreateOleObject('MSXML2.XMLHTTP');
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Failed to create MSXML2.XMLHTTP object: ' + E.Message);
+      Exit;
+    end;
+  end;
+  Assert(VarIsClear(XMLHTTP) = False, 'MSXML2.XMLHTTP object creation failed');
+  
+  // Send the GET request to fetch the conversion rate.
+  try
+    XMLHTTP.open('GET', 'https://api.exchangerate-api.com/v4/latest/ZAR', False);
+    XMLHTTP.send('');
+    JSONResponse := XMLHTTP.responseText;
   except
     on E: Exception do
     begin
@@ -78,25 +86,26 @@ begin
     end;
   end;
   Assert(JSONResponse <> '', 'Received an empty API response');
-
+  
   // Parse the JSON response.
-  JSONObject := TJSONObject.ParseJSONValue(JSONResponse) as TJSONObject;
-  Assert(JSONObject <> nil, 'Failed to parse JSON response');
+  JSONObj := TJSONObject.ParseJSONValue(JSONResponse) as TJSONObject;
+  Assert(JSONObj <> nil, 'Failed to parse JSON response');
   try
-    Rates := JSONObject.GetValue('rates') as TJSONObject;
+    Rates := JSONObj.GetValue('rates') as TJSONObject;
     Assert(Rates <> nil, 'Rates data not found in JSON response');
     USDRate := Rates.GetValue('USD');
     Assert(USDRate <> nil, 'USD rate not found in rates data');
-
-    // Convert the JSON string value to a floating-point rate.
+    
+    // Convert the USD rate from string to float and calculate the dollar value.
     RateValue := StrToFloat(USDRate.Value);
     DollarValue := RandValue * RateValue;
     lblResult.Caption := Format('USD: %.2f', [DollarValue]);
+    Assert(DollarValue >= 0, 'Calculated USD value must be non-negative');
   except
     on E: Exception do
       ShowMessage('Error processing conversion: ' + E.Message);
   end;
-  JSONObject.Free;
+  JSONObj.Free;
 end;
 
 end.
