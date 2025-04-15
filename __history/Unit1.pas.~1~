@@ -1,0 +1,134 @@
+unit Unit1;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls, ComObj, ActiveX, DBXJSON;
+
+type
+  TForm1 = class(TForm)
+    lblPrompt: TLabel;
+    edtRand: TEdit;
+    btnConvert: TButton;
+    lblResult: TLabel;
+    procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
+    procedure btnConvertClick(Sender: TObject);
+  private
+    { Private declarations }
+  public
+    { Public declarations }
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.dfm}
+
+{ Helper: Return the JSON value for the specified key inside a TJSONObject }
+function GetJSONValue(JSONObj: TJSONObject; const Key: string): TJSONValue;
+var
+  I: Integer;
+  Pair: TJSONPair;
+begin
+  Result := nil;
+  for I := 0 to JSONObj.size - 1 do
+  begin
+    Pair := JSONObj.Get(I) as TJSONPair;
+    if SameText(Pair.JsonString.Value, Key) then
+    begin
+      Result := Pair.JsonValue;
+      Break;
+    end;
+  end;
+end;
+
+procedure TForm1.FormCreate(Sender: TObject);
+begin
+  { Initialize COM so we can use MSXML2.XMLHTTP }
+  CoInitialize(nil);
+  Assert(True, 'COM initialization assumed to succeed');
+end;
+
+procedure TForm1.FormDestroy(Sender: TObject);
+begin
+  CoUninitialize;
+end;
+
+procedure TForm1.btnConvertClick(Sender: TObject);
+var
+  RandValue, DollarValue, RateValue: Double;
+  JSONResponse: string;
+  XMLHTTP: OleVariant;
+  JSONVal: TJSONValue;
+  JSONObj: TJSONObject;
+  RatesObj: TJSONObject;
+  USDRate: TJSONValue;
+  LBytes: TBytes;
+begin
+  { 1. Parse user input }
+  try
+    RandValue := StrToFloat(edtRand.Text);
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Invalid Rand value. Please enter a valid number.');
+      Exit;
+    end;
+  end;
+  Assert(RandValue >= 0, 'Input Rand value must be non-negative');
+
+  { 2. Create MSXML2.XMLHTTP for the HTTPS GET call }
+  try
+    XMLHTTP := CreateOleObject('MSXML2.XMLHTTP');
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Failed to create MSXML2.XMLHTTP object: ' + E.Message);
+      Exit;
+    end;
+  end;
+  Assert(not VarIsClear(XMLHTTP), 'MSXML2.XMLHTTP object creation failed');
+
+  { 3. Fetch the JSON data from the API }
+  try
+    XMLHTTP.open('GET', 'https://api.exchangerate-api.com/v4/latest/ZAR', False);
+    XMLHTTP.send('');
+    JSONResponse := XMLHTTP.responseText;
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Error fetching conversion rate: ' + E.Message);
+      Exit;
+    end;
+  end;
+  Assert(JSONResponse <> '', 'Received an empty API response');
+
+  { 4. Convert the JSON string to TBytes and parse }
+  LBytes := TEncoding.UTF8.GetBytes(JSONResponse);
+  JSONVal := TJSONObject.ParseJSONValue(LBytes, 0);
+  Assert(JSONVal <> nil, 'Failed to parse JSON data');
+
+  { 5. Extract rate for USD from the JSON hierarchy }
+  JSONObj := JSONVal as TJSONObject;
+  try
+    RatesObj := GetJSONValue(JSONObj, 'rates') as TJSONObject;
+    Assert(RatesObj <> nil, 'Rates object not found in JSON');
+
+    USDRate := GetJSONValue(RatesObj, 'USD');
+    Assert(USDRate <> nil, 'USD rate not found in rates data');
+
+    RateValue := StrToFloat(USDRate.Value);
+    DollarValue := RandValue * RateValue;
+    lblResult.Caption := Format('USD: %.2f', [DollarValue]);
+    Assert(DollarValue >= 0, 'Calculated USD value must be non-negative');
+  finally
+    JSONVal.Free;  // Also frees JSONObj
+  end;
+end;
+
+end.
+
